@@ -1,0 +1,41 @@
+# PRD §4.1 / §4.2 — Grapevine V1 training configuration
+# Architecture: YOLOv8-seg nano (fallback: medium, per §4.1). Large is never used in V1.
+
+model: yolov8n-seg.pt      # swap to yolov8m-seg.pt only if nano fails per §4.1
+imgsz: 640                  # §2 hard constraint — do not change
+
+epochs: 300
+patience: 50                # early stop at 50 epochs no improvement
+
+batch: 16                   # or max that fits 12GB VRAM (RTX 4070 target, §2)
+
+optimizer: SGD
+lr0: 0.01
+momentum: 0.937
+
+# Loss weights — default YOLO-seg (§4.2)
+box: 7.5
+cls: 0.5
+dfl: 1.5
+seg: 2.0
+# NOTE: focal loss (gamma=2.0) for the seg head per §4.3 class-imbalance handling
+# is NOT a native Ultralytics config key — it's applied via the monkey-patch in
+# src/grapevine/losses.py, which train.py imports before constructing the model.
+
+# Augmentation (§4.2) — deliberately excludes rotation and color jitter
+fliplr: 0.5                 # H-flip p=0.5
+scale: 0.20                 # ±20%
+translate: 0.10              # ±10%
+mosaic: 1.0                  # p=1.0 for first 150 epochs, then 0 (train.py schedules this)
+mosaic_close_epoch: 150
+
+degrees: 0.0                 # NO ROTATION — vines don't grow sideways (gravity prior)
+hsv_h: 0.0                   # NO COLOR JITTER — wood color is diagnostic
+hsv_s: 0.0
+hsv_v: 0.0
+
+classes:
+  0: trunk
+  1: cordon
+  2: cane
+  3: shoot

@@ -1,0 +1,29 @@
+# Data and datasets
+data/
+grapevine/data/
+uploads/
+grapevine/uploads/
+outputs/
+grapevine/outputs/
+runs/
+grapevine/runs/
+
+# Python and caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.cache
+*.pt
+*.npz
+
+# Media
+*.jpg
+*.jpeg
+*.png
+*.gif
+
+# Graphify artifacts
+graphify-out/
+grapevine/graphify-out/

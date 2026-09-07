@@ -1,0 +1,14 @@
+data/
+grapevine/data/
+uploads/
+grapevine/uploads/
+outputs/
+grapevine/outputs/
+runs/
+grapevine/runs/
+*.pt
+*.cache
+*.jpeg
+*.jpg
+*.png
+*.npz

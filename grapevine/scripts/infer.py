@@ -26,7 +26,10 @@ def run_inference(weights: str, image_path: str) -> tuple[dict[str, np.ndarray],
     import cv2
 
     model = YOLO(weights)
-    img = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
+    bgr = cv2.imread(image_path)
+    if bgr is None:
+        raise FileNotFoundError(f"Could not load image at '{image_path}'. Check file path.")
+    img = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     t0 = time.perf_counter()
     results = model.predict(source=image_path, imgsz=640, verbose=False)[0]

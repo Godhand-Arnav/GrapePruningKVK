@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grapevine Structural Tracing & Identification</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 24px; background: #f9f9fb; color: #1e293b; }
+  .container { max-width: 960px; margin: 0 auto; background: #ffffff; padding: 28px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  h1 { margin-top: 0; font-size: 22px; }
+  p.subtitle { color: #64748b; font-size: 14px; margin-bottom: 20px; }
+  .upload-box { border: 2px dashed #cbd5e1; padding: 24px; text-align: center; border-radius: 6px; background: #f8fafc; }
+  input[type="file"] { margin: 10px 0; font-size: 14px; }
+  button { background: #2563eb; color: #fff; border: none; padding: 10px 20px; font-size: 14px; font-weight: 600; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #94a3b8; cursor: not-allowed; }
+  #status { margin-top: 14px; font-weight: 500; font-size: 14px; }
+  .results { margin-top: 28px; display: none; }
+  .results h2 { font-size: 18px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }
+  .metric-card { background: #f1f5f9; padding: 14px; border-radius: 6px; border-left: 4px solid #2563eb; }
+  .metric-title { font-size: 12px; color: #64748b; text-transform: uppercase; font-weight: 600; }
+  .metric-value { font-size: 20px; font-weight: 700; color: #0f172a; margin-top: 4px; }
+  .preview-img { width: 100%; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #cbd5e1; margin-top: 16px; }
+  pre { background: #0f172a; color: #f8fafc; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 12px; max-height: 250px; }
+  .legend { display: flex; gap: 16px; margin-top: 10px; font-size: 13px; font-weight: 500; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Grapevine Structural Tracing & Identification</h1>
+  <p class="subtitle">Upload any grapevine image to run full V1 segmentation, skeletonization, graph tracing, and measurements.</p>
+  
+  <div class="upload-box">
+    <input type="file" id="fileInput" accept="image/*"><br>
+    <button id="submitBtn" onclick="uploadAndTrace()">Upload & Trace Vine</button>
+    <div id="status"></div>
+  </div>
+
+  <div id="resultsArea" class="results">
+    <h2>Identification & Structural Measurements</h2>
+    <div class="metrics-grid" id="metricsGrid"></div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="dot" style="background:#8B4513"></span> Trunk (0)</div>
+      <div class="legend-item"><span class="dot" style="background:#D2691E"></span> Cordon/Spur (1)</div>
+      <div class="legend-item"><span class="dot" style="background:#CD853F"></span> Cane (2)</div>
+      <div class="legend-item"><span class="dot" style="background:#32CD32"></span> Shoot (3)</div>
+    </div>
+
+    <h2>Connected Skeleton & Traced Output</h2>
+    <img id="overlayImg" class="preview-img" src="" alt="Overlay Output">
+
+    <details style="margin-top: 16px;">
+      <summary style="cursor:pointer; font-weight:600; font-size:14px;">View Raw Output JSON</summary>
+      <pre id="jsonOutput"></pre>
+    </details>
+  </div>
+</div>
+
+<script>
+async function uploadAndTrace() {
+  const fileInput = document.getElementById("fileInput");
+  const statusDiv = document.getElementById("status");
+  const submitBtn = document.getElementById("submitBtn");
+  const resultsArea = document.getElementById("resultsArea");
+  
+  if (!fileInput.files.length) {
+    statusDiv.innerHTML = '<span style="color:#ef4444;">Please select a grapevine image first.</span>';
+    return;
+  }
+  
+  const file = fileInput.files[0];
+  const formData = new FormData();
+  formData.append("file", file);
+  
+  submitBtn.disabled = true;
+  statusDiv.innerHTML = '<span style="color:#2563eb;">Processing image (segmentation -> skeleton -> graph -> measurements)...</span>';
+  resultsArea.style.display = "none";
+  
+  try {
+    const resp = await fetch("/predict", { method: "POST", body: formData });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || "Inference failed");
+    }
+    const data = await resp.json();
+    
+    // Fill metrics
+    const grid = document.getElementById("metricsGrid");
+    grid.innerHTML = "";
+    
+    const s = data.summary || {};
+    const items = [
+      { title: "Vines Detected", val: s.vine_count ?? (data.vines || []).length },
+      { title: "Trunk Length", val: (s.total_trunk_px ?? 0) + " px" },
+      { title: "Cordon Length", val: (s.total_cordon_px ?? 0) + " px" },
+      { title: "Cane Count", val: s.total_cane_count ?? 0 },
+      { title: "Shoot Count", val: s.total_shoot_count ?? 0 },
+      { title: "Total Skeleton Length", val: (s.total_length_px ?? 0) + " px" },
+      { title: "Graph Nodes / Edges", val: (s.total_nodes ?? 0) + " nodes / " + (s.total_edges ?? 0) + " edges" },
+      { title: "Junctions / Endpoints", val: (s.junction_count ?? 0) + " junc / " + (s.endpoint_count ?? 0) + " end" },
+      { title: "Inference Latency", val: (data.processing?.inference_ms || 0) + " ms" },
+      { title: "Postprocess Latency", val: (data.processing?.postprocess_ms || 0) + " ms" }
+    ];
+    
+    items.forEach(function(item) {
+      grid.innerHTML += '<div class="metric-card">' +
+        '<div class="metric-title">' + item.title + '</div>' +
+        '<div class="metric-value">' + item.val + '</div>' +
+        '</div>';
+    });
+    
+    // Display image overlay
+    document.getElementById("overlayImg").src = "data:image/png;base64," + data.overlay_png_base64;
+    document.getElementById("jsonOutput").textContent = JSON.stringify(data.result_json, null, 2);
+    
+    resultsArea.style.display = "block";
+    statusDiv.innerHTML = '<span style="color:#16a34a;">Processing completed successfully!</span>';
+  } catch (err) {
+    statusDiv.innerHTML = '<span style="color:#ef4444;">Error: ' + err.message + '</span>';
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

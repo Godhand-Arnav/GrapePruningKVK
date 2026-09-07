@@ -4,8 +4,8 @@
 model: yolov8n-seg.pt      # swap to yolov8m-seg.pt only if nano fails per §4.1
 imgsz: 640                  # §2 hard constraint — do not change
 
-epochs: 300
-patience: 50                # early stop at 50 epochs no improvement
+epochs: 25
+patience: 10                # early stop at 10 epochs no improvement
 
 batch: 16                   # or max that fits 12GB VRAM (RTX 4070 target, §2)
 

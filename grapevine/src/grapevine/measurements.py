@@ -16,60 +16,41 @@ import networkx as nx
 
 
 def trunk_length_px(g: nx.Graph, root: int) -> float:
-    """Sum of trunk-class edges from root to the first cordon junction.
-
-    Walk from root along trunk-class edges only, stopping once a non-trunk
-    edge is reached (that's the cordon split point).
-    """
-    total = 0.0
-    current = root
-    visited = {root}
-    while True:
-        trunk_neighbors = [
-            (n, data) for n, data in
-            ((nb, g[current][nb]) for nb in g.neighbors(current))
-            if data.get("cls") == "trunk" and n not in visited
-        ]
-        if not trunk_neighbors:
-            break
-        n, data = trunk_neighbors[0]
-        total += data["length_px"]
-        visited.add(n)
-        current = n
+    """Sum of trunk-class edge lengths in the vine graph."""
+    total = sum(data.get("length_px", 0.0) for _, _, data in g.edges(data=True) if data.get("cls") == "trunk")
     return total
 
 
 def cordon_length_px(g: nx.Graph) -> float:
-    return sum(data["length_px"] for _, _, data in g.edges(data=True) if data.get("cls") == "cordon")
+    return sum(data.get("length_px", 0.0) for _, _, data in g.edges(data=True) if data.get("cls") == "cordon")
+
+
+def cane_length_px(g: nx.Graph) -> float:
+    return sum(data.get("length_px", 0.0) for _, _, data in g.edges(data=True) if data.get("cls") == "cane")
+
+
+def shoot_length_px(g: nx.Graph) -> float:
+    return sum(data.get("length_px", 0.0) for _, _, data in g.edges(data=True) if data.get("cls") == "shoot")
+
+
+def trunk_count(g: nx.Graph) -> int:
+    """Number of trunk-class branch edges."""
+    return sum(1 for _, _, data in g.edges(data=True) if data.get("cls") == "trunk")
+
+
+def cordon_count(g: nx.Graph) -> int:
+    """Number of cordon-class branch edges."""
+    return sum(1 for _, _, data in g.edges(data=True) if data.get("cls") == "cordon")
 
 
 def cane_count(g: nx.Graph) -> int:
-    """Number of cane-class edges directly connected to a cordon-class edge
-    (i.e. cane edges originating at a node that also touches a cordon edge)."""
-    count = 0
-    for u, v, data in g.edges(data=True):
-        if data.get("cls") != "cane":
-            continue
-        touches_cordon = any(
-            g[n][nb].get("cls") == "cordon"
-            for n in (u, v)
-            for nb in g.neighbors(n)
-            if nb not in (u, v)
-        )
-        if touches_cordon:
-            count += 1
-    return count
+    """Number of cane-class branch edges (connected to trunk or cordon)."""
+    return sum(1 for _, _, data in g.edges(data=True) if data.get("cls") == "cane")
 
 
 def shoot_count(g: nx.Graph) -> int:
-    """Number of shoot-class terminal edges (edge touches a degree-1 node)."""
-    count = 0
-    for u, v, data in g.edges(data=True):
-        if data.get("cls") != "shoot":
-            continue
-        if g.degree(u) == 1 or g.degree(v) == 1:
-            count += 1
-    return count
+    """Number of shoot-class branch edges."""
+    return sum(1 for _, _, data in g.edges(data=True) if data.get("cls") == "shoot")
 
 
 def _edge_direction_at_node(g: nx.Graph, junction: int, other: int) -> tuple[float, float]:
@@ -118,10 +99,21 @@ def branching_angles(g: nx.Graph) -> list[dict]:
 
 
 def compute_measurements(g: nx.Graph, root: int) -> dict:
+    t_len = round(trunk_length_px(g, root), 2)
+    c_len = round(cordon_length_px(g), 2)
+    cane_len = round(cane_length_px(g), 2)
+    s_len = round(shoot_length_px(g), 2)
     return {
-        "trunk_length_px": round(trunk_length_px(g, root), 2),
-        "cordon_length_px": round(cordon_length_px(g), 2),
+        "trunk_length_px": t_len,
+        "cordon_length_px": c_len,
+        "cane_length_px": cane_len,
+        "shoot_length_px": s_len,
+        "total_length_px": round(t_len + c_len + cane_len + s_len, 2),
+        "trunk_count": trunk_count(g),
+        "cordon_count": cordon_count(g),
         "cane_count": cane_count(g),
         "shoot_count": shoot_count(g),
+        "node_count": g.number_of_nodes(),
+        "edge_count": g.number_of_edges(),
         "branching_angles": branching_angles(g),
     }

@@ -89,6 +89,7 @@ def main():
 
     # --- image count ---
     all_images = sorted(p.name for p in args.images.glob("*.jpg")) + \
+                 sorted(p.name for p in args.images.glob("*.jpeg")) + \
                  sorted(p.name for p in args.images.glob("*.png"))
     print(f"[check] total images found: {len(all_images)}")
     if len(all_images) < MIN_TOTAL_IMAGES:

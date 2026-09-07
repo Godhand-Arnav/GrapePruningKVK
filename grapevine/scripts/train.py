@@ -16,6 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import torch
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -23,13 +24,25 @@ from grapevine.losses import apply_focal_seg_loss_patch  # noqa: E402  (must pre
 
 
 def build_data_yaml(splits_dir: Path, classes: dict[int, str], out_path: Path) -> Path:
-    data_cfg = {
-        "path": str(splits_dir.parent.resolve()),
-        "train": str((splits_dir / "train.txt").resolve()),
-        "val": str((splits_dir / "val.txt").resolve()),
-        "test": str((splits_dir / "test.txt").resolve()),
-        "names": classes,
-    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = splits_dir.parent.resolve()
+    train_dir = data_dir / "images" / "train"
+    if train_dir.exists():
+        data_cfg = {
+            "path": str(data_dir).replace("\\", "/"),
+            "train": "images/train",
+            "val": "images/val",
+            "test": "images/test",
+            "names": classes,
+        }
+    else:
+        data_cfg = {
+            "path": str(data_dir).replace("\\", "/"),
+            "train": str((splits_dir / "train.txt").resolve()).replace("\\", "/"),
+            "val": str((splits_dir / "val.txt").resolve()).replace("\\", "/"),
+            "test": str((splits_dir / "test.txt").resolve()).replace("\\", "/"),
+            "names": classes,
+        }
     out_path.write_text(yaml.safe_dump(data_cfg, sort_keys=False))
     return out_path
 
@@ -81,6 +94,7 @@ def main():
         hsv_v=cfg["hsv_v"],
         project=str(args.out.parent),
         name=args.out.name,
+        device=0 if torch.cuda.is_available() else "cpu",
     )
 
 

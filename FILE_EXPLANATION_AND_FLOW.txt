@@ -1,0 +1,278 @@
+================================================================================
+GRAPEVINE V1 STRUCTURAL TRACING PIPELINE — FILE EXPLANATION & ARCHITECTURE FLOW
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+This project implements an end-to-end Machine Learning and Computer Vision pipeline 
+that processes an RGB grapevine image, detects primary structural classes 
+(trunk, cordon/spur, cane, shoot), cleans and skeletonizes the masks into a 1-pixel 
+centerline, builds a topological graph (nodes, edges, junctions, endpoints), performs 
+whole-vine hierarchy tracing, computes structural measurements (pixel lengths, branch 
+counts, branching angles), and delivers a 4-panel visual overlay alongside a structured 
+JSON payload.
+
+Target Classes (V1):
+  - Class 0: Trunk  (Base root crown, vertical main trunk, and head old wood)
+  - Class 1: Cordon (Guyot courson renewal spur / cordon-equivalent structure)
+  - Class 2: Cane   (Fruiting canes)
+  - Class 3: Shoot  (Annual green vegetative shoots and lateral branches)
+
+
+================================================================================
+2. HIGH-LEVEL PIPELINE FLOW
+================================================================================
+
+  [ Input RGB Image ]
+          │
+          ▼
+  1. YOLOv8 Segmentation (scripts/infer.py)
+     - Runs model prediction (imgsz=640)
+     - Extracts binary masks per class resized to original dimensions
+          │
+          ▼
+  2. Mask Postprocessing (src/grapevine/postprocess.py)
+     - Morphological opening (disk r=2) to eliminate noise < 4px
+     - Remove disconnected components < 20px
+     - Fill internal holes < 50px
+     - Class priority merge: Trunk (0) > Cordon (1) > Cane (2) > Shoot (3)
+          │
+          ▼
+  3. Skeletonization (src/grapevine/skeletonize.py)
+     - Merges cleaned masks into a single binary vine mask
+     - Applies Zhang-Suen morphological thinning to extract 1px centerlines
+          │
+          ▼
+  4. Graph Construction (src/grapevine/graph_build.py)
+     - Detects endpoint pixels (1 neighbor) and junction pixels (>= 3 neighbors)
+     - 8-connected clustering to merge adjacent junction pixels into single nodes
+     - Walks corridors of regular pixels to form edges
+     - Prunes artifact spurs (< 10px) while preserving shoot tips
+     - Labels each edge with dominant class along its pixel path
+          │
+          ▼
+  5. Whole-Vine Tracing (src/grapevine/trace.py)
+     - Identifies root node (lowest-Y / ground level node touching trunk)
+     - Executes BFS traversal from root
+     - Enforces botanical hierarchy: Trunk -> Cordon -> Cane -> Shoot
+     - Handles multiple distinct vines in the same frame
+          │
+          ▼
+  6. Measurements (src/grapevine/measurements.py)
+     - Computes trunk length (px), cordon length (px), cane length (px), shoot length (px)
+     - Counts trunk branches, cordon spurs, cane branches, shoot branches
+     - Computes branching angles (degrees) at all junction nodes
+          │
+          ▼
+  7. Output Rendering (src/grapevine/visualize.py & schema.py)
+     - Generates 4-panel 2x2 overlay PNG (Original, Segmentation, Skeleton, Graph)
+     - Generates compliant Schema v1.0 JSON payload (nodes, edges, measurements)
+          │
+          ▼
+  8. Interactive Presentation (app.py & templates/index.html)
+     - Serves web UI for drag-and-drop inference, real-time measurements & visuals
+
+
+================================================================================
+3. COMPREHENSIVE FILE-BY-FILE BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+A. CONFIGURATION FILES
+--------------------------------------------------------------------------------
+• grapevine/configs/train_config.yaml
+  - Purpose: Hyperparameter specification for YOLOv8n-seg model training.
+  - Contents: Model architecture (yolov8n-seg.pt), image size (640), epochs (25),
+    batch size (16), optimizer (SGD, lr0=0.01, momentum=0.937), loss weights 
+    (box=7.5, cls=0.5, dfl=1.5, seg=2.0), augmentations (fliplr=0.5, scale=0.2, 
+    translate=0.1, mosaic=1.0, degrees=0.0 [no rotation], hsv=0.0 [no color jitter]), 
+    and class name mappings.
+
+--------------------------------------------------------------------------------
+B. CLI SCRIPTS & ENTRY POINTS (grapevine/scripts/)
+--------------------------------------------------------------------------------
+• grapevine/scripts/convert_3d2cut.py
+  - Purpose: Converts native 3D2cut Single Guyot skeletal annotations to YOLO-seg 
+    normalized polygon format and creates dataset splits.
+  - Flow:
+    1. Reads JSON annotations (FeatureID, ParentID, FeatureCoordinates, BranchLabel).
+    2. Maps labels: root/mainTrunk/oldWood -> 0, courson -> 1, cane -> 2, shoot/lateralShoot -> 3.
+    3. Renders calibrated ribbon polygons (trunk=28px, cordon=18px, cane=14px, shoot=8px).
+    4. Extracts contours via cv2.findContours and cv2.approxPolyDP into [0, 1] normalized coordinates.
+    5. Creates train (1045 images), val (209 images), and test (257 images) splits.
+    6. Outputs data/annotations/, data/labels/, data/splits/{train,val,test}.txt, and data.yaml.
+
+• grapevine/scripts/validate_dataset.py
+  - Purpose: Strict dataset quality gate enforcing PRD requirements before training.
+  - Checks:
+    1. Total image count >= 500 images.
+    2. Per-class instance thresholds across dataset (trunk>=400, cordon>=350, cane>=500, shoot>=800).
+    3. Per-class instance thresholds on test split (trunk>=40, cordon>=35, cane>=50, shoot>=80).
+    4. Zero train/test vine ID overlap (checked via manifest.csv).
+    5. Valid license field present for all manifested images.
+
+• grapevine/scripts/train.py
+  - Purpose: Model training entry point.
+  - Flow:
+    1. Applies focal loss monkey-patch (losses.py) to Ultralytics before model build.
+    2. Generates dynamic data.yaml pointing to dataset images and labels.
+    3. Initializes YOLOv8n-seg and executes training on CUDA GPU if available.
+    4. Saves optimized model weights to runs/3d2cut_run/weights/best.pt.
+
+• grapevine/scripts/infer.py
+  - Purpose: Low-level YOLO inference module producing raw per-class binary masks.
+  - Function `run_inference(weights, image_path)`:
+    1. Loads YOLO model and reads RGB image.
+    2. Runs model.predict(source=image, imgsz=640).
+    3. Resizes output masks back to native image dimensions (H, W).
+    4. Returns dict of boolean masks per class, original image array, and inference latency (ms).
+
+• grapevine/scripts/pipeline.py
+  - Purpose: Full end-to-end command-line pipeline coordinator.
+  - Usage: `python scripts/pipeline.py --weights best.pt --image vine.jpg --out-dir outputs/vine/`
+  - Flow: Links `infer` -> `postprocess` -> `skeletonize` -> `graph_build` -> `trace` 
+    -> `measurements` -> `schema` -> `visualize`.
+  - Generates: `result.json` and `overlay.png`.
+
+--------------------------------------------------------------------------------
+C. CORE PACKAGE MODULES (grapevine/src/grapevine/)
+--------------------------------------------------------------------------------
+• grapevine/src/grapevine/__init__.py
+  - Purpose: Package initialization; defines the grapevine module namespace.
+
+• grapevine/src/grapevine/losses.py
+  - Purpose: Monkey-patches Ultralytics segmentation loss with Focal Loss (gamma=2.0).
+  - Why: Class imbalance handling (shoots outnumber trunks in pixel volume).
+  - Implementation: Replaces per-pixel BCE in `v8SegmentationLoss.single_mask_loss` with
+    focal-weighted binary cross entropy: FL(p_t) = -(1 - p_t)^gamma * log(p_t).
+
+• grapevine/src/grapevine/postprocess.py
+  - Purpose: PRD §6.1 morphological cleanup of raw neural network masks.
+  - Functions:
+    - `clean_class_mask()`: Morphological opening (disk r=2), small component removal (<20px),
+      and hole filling (<50px).
+    - `merge_by_priority()`: Resolves pixel overlap via class hierarchy:
+      Trunk > Cordon > Cane > Shoot.
+    - `clean_masks()`: Applies per-class cleanup followed by priority merging.
+    - `combined_binary_mask()`: Unions all 4 clean masks into one unified boolean vine mask.
+    - `class_label_map()`: Maps 2D coordinates to uint8 class labels (0=bg, 1=trunk, 2=cordon, 3=cane, 4=shoot).
+
+• grapevine/src/grapevine/skeletonize.py
+  - Purpose: PRD §6.2 centerline extraction.
+  - Function `skeletonize()`: Applies Zhang-Suen thinning (`skimage.morphology.skeletonize(..., method='zhang')`)
+    to turn unified binary masks into 1-pixel-wide topological skeletons.
+
+• grapevine/src/grapevine/graph_build.py
+  - Purpose: PRD §6.3 converts 2D pixel skeletons into mathematical NetworkX graphs.
+  - Functions:
+    - `detect_node_pixels()`: Evaluates 3x3 pixel neighborhoods (1 neighbor = endpoint, >=3 = junction).
+    - `_cluster_junction_pixels()`: 8-connects adjacent junction pixels into single consolidated nodes.
+    - `build_edge_paths()`: Walks corridor pixels between nodes to reconstruct edge geometries.
+    - `prune_spurs()`: Removes artifact spurs (< 10px) while keeping legitimate shoot tips.
+    - `build_graph()`: Constructs NetworkX Graph with node coordinates (x, y), node types, 
+      edge lengths (px), pixel paths, and dominant class labels.
+
+• grapevine/src/grapevine/trace.py
+  - Purpose: PRD §6.4 hierarchical graph traversal and whole-vine tracing.
+  - Functions:
+    - `find_root()`: Finds ground-level base node (lowest-Y / max pixel Y touching trunk).
+    - `trace_vine()`: Runs BFS traversal from root, verifies botanical hierarchy
+      (Trunk -> Cordon -> Cane -> Shoot), and detects leaf-to-root paths.
+    - `split_vines()`: Splits disconnected subgraphs into separate individual vine components.
+    - `trace_all_vines()`: Traces all valid vines present in the image.
+
+• grapevine/src/grapevine/measurements.py
+  - Purpose: PRD §7 extracts quantitative structural metrics in pixel units.
+  - Functions:
+    - `trunk_length_px()`: Total length of trunk-class edges.
+    - `cordon_length_px()`: Total length of cordon-class edges.
+    - `cane_length_px()`: Total length of cane-class edges.
+    - `shoot_length_px()`: Total length of shoot-class edges.
+    - `trunk_count()`, `cordon_count()`, `cane_count()`, `shoot_count()`: Counts of detected branches.
+    - `branching_angles()`: Calculates acute/obtuse angles (degrees) between incident edges at junctions.
+    - `compute_measurements()`: Packages all structural metrics into a unified dictionary.
+
+• grapevine/src/grapevine/schema.py
+  - Purpose: PRD §8 output JSON serialization schema.
+  - Classes: Node, Edge, Path, Vine.
+  - Functions: `build_output()`, `write_output()`. Ensures safe numpy-to-native type conversion
+    and enforces maximum payload size limits.
+
+• grapevine/src/grapevine/visualize.py
+  - Purpose: PRD §9 produces a standardized 4-panel (2x2) PNG visualization.
+  - Panels:
+    [Top-Left]     Original RGB Image
+    [Top-Right]    Segmentation Overlay (color-coded by class)
+    [Bottom-Left]  Zhang-Suen 1px Skeleton
+    [Bottom-Right] Traced Graph with Junction/Endpoint markers, edge colors, and measurement labels.
+
+• grapevine/src/grapevine/failure_classification.py
+  - Purpose: PRD §5.3 automated failure analysis and quality bucketing.
+  - Codes:
+    - F1: Missing thin shoots (<3px)
+    - F2: Broken mask / disconnected fragments
+    - F3: Wrong class / hierarchy violations
+    - F4: Merged vines (multiple trunks in single graph)
+    - F5: False positive background detections
+
+--------------------------------------------------------------------------------
+D. WEB APPLICATION & USER INTERFACE
+--------------------------------------------------------------------------------
+• grapevine/app.py
+  - Purpose: FastAPI backend server for the web interface.
+  - Endpoints:
+    - `GET /`: Serves `templates/index.html`.
+    - `POST /predict`: Accepts image upload, executes full pipeline, returns JSON results 
+      and base64-encoded overlay PNG.
+
+• grapevine/templates/index.html
+  - Purpose: Clean, lightweight single-page web UI.
+  - Features:
+    - Drag-and-drop / file upload input.
+    - Real-time metrics grid (Vines detected, trunk/cordon/cane/shoot counts and pixel lengths,
+      nodes/edges, junctions/endpoints, latency).
+    - High-resolution 4-panel visual overlay display.
+    - Collapsible raw JSON viewer.
+
+--------------------------------------------------------------------------------
+E. TESTS & PROJECT META
+--------------------------------------------------------------------------------
+• grapevine/tests/test_pipeline.py
+  - Purpose: Pytest test suite testing synthetic T-vine masks through postprocess, 
+    skeletonize, graph build, whole-vine trace, and measurement calculations.
+
+• .gitignore & .graphifyignore
+  - Purpose: Ignores large raw dataset files, images, weights, cache, and build outputs
+    from git tracking and Graphify AST indexing.
+
+• grapevine/requirements.txt
+  - Purpose: Package dependencies (ultralytics, opencv-python-headless, scikit-image, 
+    networkx, torch, torchvision, fastapi, uvicorn, pyyaml, matplotlib).
+
+
+================================================================================
+4. SUMMARY OF EXECUTION COMMANDS
+================================================================================
+
+1. Run Web Application:
+   python grapevine/app.py
+   (Open http://127.0.0.1:8000 in your browser)
+
+2. Convert Dataset:
+   python grapevine/scripts/convert_3d2cut.py --root grapevine/data/3D2cut_Single_Guyot --output grapevine/data
+
+3. Validate Dataset Quality Gate:
+   python grapevine/scripts/validate_dataset.py --images grapevine/data/raw --labels grapevine/data/annotations --splits grapevine/data/splits --classes trunk cordon cane shoot
+
+4. Train Model:
+   python grapevine/scripts/train.py --config grapevine/configs/train_config.yaml --data grapevine/data/splits --out grapevine/runs/3d2cut_run
+
+5. Run Single-Image CLI Pipeline:
+   python grapevine/scripts/pipeline.py --weights grapevine/runs/3d2cut_run/weights/best.pt --image <path_to_image> --out-dir outputs/sample_run
+
+6. Run Automated Tests:
+   pytest grapevine/tests/test_pipeline.py -v
+
+================================================================================
+END OF FILE EXPLANATION
+================================================================================
